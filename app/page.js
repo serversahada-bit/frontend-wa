@@ -10,11 +10,9 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
+// ✅ REVISI: Menggunakan HTTPS dan .env agar tidak error di Coolify
 const getSocketUrl = () => {
-  if (typeof window !== 'undefined') {
-    return `http://${window.location.hostname}:3001`;
-  }
-  return 'http://localhost:3001';
+  return process.env.NEXT_PUBLIC_API_URL || 'https://et8mpjr65plrf9qkfput5fvr.72.61.141.107.sslip.io';
 };
 
 const DEFAULT_MSG = `Halo Kak 👋\n\nKenalin, *Gamamilk* 🥛\nSusu etawa pilihan keluarga.`;
