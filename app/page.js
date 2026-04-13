@@ -12,7 +12,7 @@ import * as XLSX from 'xlsx';
 
 // ✅ REVISI: Menggunakan HTTPS dan .env agar tidak error di Coolify
 const getSocketUrl = () => {
-  return process.env.NEXT_PUBLIC_API_URL || 'https://et8mpjr65plrf9qkfput5fvr.72.61.141.107.sslip.io';
+  return process.env.NEXT_PUBLIC_API_URL || 'https://apiwa.ptslu.cloud';
 };
 
 const DEFAULT_MSG = `Halo Kak 👋\n\nKenalin, *Gamamilk* 🥛\nSusu etawa pilihan keluarga.`;
@@ -23,28 +23,28 @@ const CustomAccountDropdown = ({ options, activeId, onChange }) => {
     <div className="relative w-full">
       {open && <div className="fixed inset-0 z-40" onClick={() => setOpen(false)}></div>}
       <div onClick={() => setOpen(!open)} className={`font-bold text-slate-800 cursor-pointer flex items-center justify-between w-full relative z-40 p-1 -m-1 rounded-lg hover:bg-slate-50 transition`}>
-         <span className="truncate pr-4 text-[13px] tracking-wide">{activeId || "Pilih Akun..."}</span>
-         {options.length > 0 && <ChevronDown size={14} className={`text-slate-400 transition-transform shrink-0 ${open ? 'rotate-180':''}`} />}
+        <span className="truncate pr-4 text-[13px] tracking-wide">{activeId || "Pilih Akun..."}</span>
+        {options.length > 0 && <ChevronDown size={14} className={`text-slate-400 transition-transform shrink-0 ${open ? 'rotate-180' : ''}`} />}
       </div>
       {open && (
-         <div className={`absolute top-full left-0 mt-3 w-[260px] bg-white border border-slate-100 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] rounded-2xl z-50 overflow-hidden animate-in zoom-in-95 fade-in duration-200`}>
-           {options.length === 0 ? (
-             <div className="p-4 text-xs font-medium text-slate-400 text-center">Belum ada perangkat terhubung.</div>
-           ) : options.map(o => {
-             const isSel = activeId === o.sessionId;
-             return (
-               <div key={o.sessionId} onClick={() => { onChange(o.sessionId); setOpen(false); }} className={`px-4 py-3 cursor-pointer flex items-center gap-3 border-b border-slate-50 last:border-0 transition-colors ${isSel ? 'bg-indigo-50/50' : 'hover:bg-slate-50'}`}>
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSel ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
-                    <Smartphone size={14} />
-                  </div>
-                  <div className="flex flex-col">
-                    <span className={`text-[13px] font-bold ${isSel ? 'text-indigo-700' : 'text-slate-700'}`}>{o.sessionId}</span>
-                  </div>
-                  {isSel && <CheckCircle2 size={16} className={`text-indigo-500 ml-auto`} />}
-               </div>
-             )
-           })}
-         </div>
+        <div className={`absolute top-full left-0 mt-3 w-[260px] bg-white border border-slate-100 shadow-[0_10px_40px_-10px_rgba(0,0,0,0.15)] rounded-2xl z-50 overflow-hidden animate-in zoom-in-95 fade-in duration-200`}>
+          {options.length === 0 ? (
+            <div className="p-4 text-xs font-medium text-slate-400 text-center">Belum ada perangkat terhubung.</div>
+          ) : options.map(o => {
+            const isSel = activeId === o.sessionId;
+            return (
+              <div key={o.sessionId} onClick={() => { onChange(o.sessionId); setOpen(false); }} className={`px-4 py-3 cursor-pointer flex items-center gap-3 border-b border-slate-50 last:border-0 transition-colors ${isSel ? 'bg-indigo-50/50' : 'hover:bg-slate-50'}`}>
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 ${isSel ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-500'}`}>
+                  <Smartphone size={14} />
+                </div>
+                <div className="flex flex-col">
+                  <span className={`text-[13px] font-bold ${isSel ? 'text-indigo-700' : 'text-slate-700'}`}>{o.sessionId}</span>
+                </div>
+                {isSel && <CheckCircle2 size={16} className={`text-indigo-500 ml-auto`} />}
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )
@@ -86,7 +86,7 @@ export default function Home() {
     try {
       const res = await fetch(`${getSocketUrl()}/api/contacts/${activeSessionId}`);
       setDbContacts(await res.json());
-    } catch(e) {}
+    } catch (e) { }
   };
 
   useEffect(() => {
@@ -106,19 +106,19 @@ export default function Home() {
         setNewContactNumber('');
         loadDbContacts();
       } else alert((await res.json()).error);
-    } catch(e) {}
+    } catch (e) { }
     setIsSavingContact(false);
   };
 
   const handleImportSheet = async () => {
     if (!activeSessionId) return alert("Pilih perangkat dulu pada dropdown di atas!");
     if (!sheetLink.trim()) return alert("Masukkan link Google Sheets!");
-    
+
     // Extract ID (e.g. /d/1XyZ.../edit)
     const match = sheetLink.match(/\/d\/([a-zA-Z0-9-_]+)/);
     if (!match) return alert("Link Google Sheets tidak valid. Harus mengandung format '/d/ID_DOKUMEN'");
     const docId = match[1];
-    
+
     let gid = '0';
     const gidMatch = sheetLink.match(/[#&]gid=([0-9]+)/);
     if (gidMatch) gid = gidMatch[1];
@@ -129,10 +129,10 @@ export default function Home() {
       const res = await fetch(csvUrl);
       if (!res.ok) throw new Error("Gagal mengambil data. Pastikan Sheet Anda memiliki akses 'Anyone with the link can view'.");
       const csvText = await res.text();
-      
+
       const rows = csvText.split('\n').map(r => r.trim()).filter(r => r);
       let parsedContacts = [];
-      
+
       // Basic CSV heuristic parsing
       // Looking for a numeric-only column that starts with 62 or 08
       for (const row of rows) {
@@ -140,24 +140,24 @@ export default function Home() {
         const cols = row.split(',').map(c => c.trim().replace(/^"|"$/g, ''));
         let name = '';
         let number = '';
-        
+
         for (const col of cols) {
           const clean = String(col).replace(/[-\s+]/g, '');
           if (clean.match(/^(62|08)[0-9]{8,15}$/) && !number) {
             number = clean;
-          } else if (!name && isNaN(Number(col.charAt(0)))) { 
+          } else if (!name && isNaN(Number(col.charAt(0)))) {
             // set target name to first column that doesn't start with a number
-            name = col; 
+            name = col;
           }
         }
         if (number) {
-           parsedContacts.push({ name: name || number, number });
+          parsedContacts.push({ name: name || number, number });
         }
       }
 
       if (parsedContacts.length === 0) {
-         setIsImportingSheet(false);
-         return alert("Tidak ada data nomor WhatsApp valid yang ditemukan di file Sheet tersebut.");
+        setIsImportingSheet(false);
+        return alert("Tidak ada data nomor WhatsApp valid yang ditemukan di file Sheet tersebut.");
       }
 
       // POST to backend
@@ -172,7 +172,7 @@ export default function Home() {
       } else {
         alert((await pushRes.json()).error);
       }
-    } catch(err) {
+    } catch (err) {
       alert(err.message || "Gagal mengimpor Spreadsheet");
     }
     setIsImportingSheet(false);
@@ -186,24 +186,24 @@ export default function Home() {
         body: JSON.stringify({ id })
       });
       loadDbContacts();
-    } catch(e) {}
+    } catch (e) { }
   };
 
   const loadContactsIntoblast = async () => {
-    if(!activeSessionId) return;
+    if (!activeSessionId) return;
     try {
       const res = await fetch(`${getSocketUrl()}/api/contacts/${activeSessionId}`);
       const data = await res.json();
-      if(data.length === 0) return alert('Buku telepon untuk akun ini masih kosong.');
-      
+      if (data.length === 0) return alert('Buku telepon untuk akun ini masih kosong.');
+
       const currentF = getForm();
       const existing = currentF.numbers.split(/[\n,]+/).map(n => n.trim()).filter(n => n !== '');
       const allNumbers = data.map(c => c.contact_number);
       const combined = [...new Set([...existing, ...allNumbers])];
-      
+
       updateForm('numbers', combined.join('\n'));
       alert(`✨ BERHASIL: Menyuntikkan ${allNumbers.length} nomor dari Database!`);
-    } catch(e) {}
+    } catch (e) { }
   };
 
   // Chatbot Auto-Responder State
@@ -942,7 +942,7 @@ export default function Home() {
           <h3 className="font-bold text-slate-800 text-lg flex items-center gap-2">Database Aturan Aktif</h3>
           <span className="text-xs font-bold text-indigo-600 bg-indigo-100 px-3 py-1.5 rounded-lg shadow-sm border border-indigo-200">{autoReplies.length} Skrip Berjalan</span>
         </div>
-        
+
         <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-200 relative p-6">
           {autoReplies.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-slate-400 p-8 text-center animate-in zoom-in-95 duration-500">
@@ -1016,7 +1016,7 @@ export default function Home() {
         <div className="bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-200 relative overflow-hidden group shrink-0">
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-teal-500 to-emerald-400"></div>
           <h3 className="font-bold text-slate-800 text-lg mb-6 flex items-center gap-2"><UserPlus size={20} className="text-teal-500" /> Tambah Manual</h3>
-          
+
           <div className="flex flex-col mb-5 relative group/input">
             <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Nama Panggilan</label>
             <div className="relative">
@@ -1034,7 +1034,7 @@ export default function Home() {
           </div>
 
           <button disabled={isSavingContact || !activeSessionId} onClick={handleAddContact} className="w-full py-3.5 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 shadow-lg shadow-teal-500/30 hover:-translate-y-0.5 active:translate-y-0">
-            {isSavingContact ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />} 
+            {isSavingContact ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
             {activeSessionId ? "Simpan ke Database" : "Pilih Perangkat Dulu"}
           </button>
         </div>
@@ -1044,7 +1044,7 @@ export default function Home() {
           <div className="absolute top-0 left-0 w-full h-1.5 bg-gradient-to-r from-sky-500 to-blue-500"></div>
           <h3 className="font-bold text-slate-800 text-lg mb-2 flex items-center gap-2"><Link2 size={20} className="text-sky-500 -rotate-45" /> Import G-Sheets</h3>
           <p className="text-xs text-slate-500 mb-6 leading-relaxed">Secara otomatis mendeteksi kolom Nomor WhatsApp dari Spreadsheet Anda. <span className="font-bold text-sky-600">Pastikan status Share = Anyone with the link.</span></p>
-          
+
           <div className="flex flex-col mb-4 relative group/input">
             <input type="text" value={sheetLink} disabled={isImportingSheet} onChange={e => setSheetLink(e.target.value)} placeholder="Tempel Link Spreadsheet di sini..." className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-sky-500 focus:bg-white focus:ring-4 focus:ring-sky-500/10 outline-none text-sm transition-all shadow-inner" />
           </div>
@@ -1056,10 +1056,10 @@ export default function Home() {
 
         {/* CTA Banner */}
         <div className="bg-gradient-to-br from-indigo-900 to-slate-900 rounded-3xl p-7 text-white shadow-xl relative overflow-hidden mt-auto shrink-0">
-            <div className="absolute -right-6 -bottom-6 opacity-10"><Database size={120} /></div>
-            <h4 className="font-bold text-lg mb-2 relative z-10 flex items-center gap-2"><Send size={18} className="text-indigo-400" /> Integrasi Blast</h4>
-            <p className="text-sm text-indigo-200 leading-relaxed relative z-10 mb-6">Secara default, seluruh nomor kontak di dalam tabel (di sisi kanan) dapat Anda ekskusi langsung di jendela Blast Campaign.</p>
-            <button onClick={() => setActiveMenu('blast')} className="px-4 py-2.5 bg-indigo-500/30 hover:bg-indigo-500/50 rounded-xl text-sm font-bold border border-indigo-500/50 transition relative z-10 flex items-center justify-center w-full gap-2"><Send size={16} /> Buka Layar Blast</button>
+          <div className="absolute -right-6 -bottom-6 opacity-10"><Database size={120} /></div>
+          <h4 className="font-bold text-lg mb-2 relative z-10 flex items-center gap-2"><Send size={18} className="text-indigo-400" /> Integrasi Blast</h4>
+          <p className="text-sm text-indigo-200 leading-relaxed relative z-10 mb-6">Secara default, seluruh nomor kontak di dalam tabel (di sisi kanan) dapat Anda ekskusi langsung di jendela Blast Campaign.</p>
+          <button onClick={() => setActiveMenu('blast')} className="px-4 py-2.5 bg-indigo-500/30 hover:bg-indigo-500/50 rounded-xl text-sm font-bold border border-indigo-500/50 transition relative z-10 flex items-center justify-center w-full gap-2"><Send size={16} /> Buka Layar Blast</button>
         </div>
 
       </div>
@@ -1068,11 +1068,11 @@ export default function Home() {
       <div className="flex-1 flex flex-col bg-white rounded-3xl shadow-lg shadow-slate-200/50 border border-slate-200 overflow-hidden h-full">
         <div className="p-5 px-6 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <h3 className="font-bold text-slate-800 flex items-center gap-2 text-lg">
-            Semua Kontak 
+            Semua Kontak
             <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-md text-xs ml-2">{dbContacts.length}</span>
           </h3>
           <div className="flex bg-white border border-slate-200 rounded-xl p-1 shadow-sm">
-              <button onClick={loadDbContacts} className="px-3 py-1.5 hover:bg-slate-50 rounded-lg text-sm font-bold text-slate-600 flex items-center gap-2 transition"><RefreshCcw size={14} /> Segarkan Manual</button>
+            <button onClick={loadDbContacts} className="px-3 py-1.5 hover:bg-slate-50 rounded-lg text-sm font-bold text-slate-600 flex items-center gap-2 transition"><RefreshCcw size={14} /> Segarkan Manual</button>
           </div>
         </div>
 
@@ -1112,7 +1112,7 @@ export default function Home() {
                     </td>
                     <td className="px-6 py-4">
                       <span className="font-mono text-slate-600 font-medium bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-100 group-hover:border-teal-100 group-hover:bg-white transition flex w-fit items-center gap-2">
-                          <MessageSquare size={12} className="text-slate-400" /> {c.contact_number}
+                        <MessageSquare size={12} className="text-slate-400" /> {c.contact_number}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right">
@@ -1222,7 +1222,7 @@ export default function Home() {
             <div className="p-7 rounded-b-3xl bg-slate-50 relative">
               <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2 block">ID / Nama Sesi Perangkat</label>
               <input type="text" autoFocus value={newDeviceName} onChange={e => setNewDeviceName(e.target.value)} onKeyDown={e => e.key === 'Enter' && submitCreateSession()} placeholder="Contoh: CS Pusat 1" className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-500/10 outline-none text-sm font-bold text-slate-800 transition-all shadow-inner mb-6 tracking-wide" />
-              
+
               <div className="flex items-center justify-end gap-3 mt-2">
                 <button onClick={() => setIsAddDeviceModal(false)} className="px-5 py-2.5 rounded-xl font-bold text-slate-500 hover:bg-slate-200 hover:text-slate-700 transition">Batal</button>
                 <button onClick={submitCreateSession} disabled={!newDeviceName.trim()} className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-300 disabled:text-slate-500 text-white rounded-xl font-bold transition flex items-center gap-2 shadow-lg shadow-blue-500/30 hover:-translate-y-0.5"><Send size={16} /> Buat Sesi</button>
