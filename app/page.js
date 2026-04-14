@@ -419,7 +419,7 @@ export default function Home() {
         setIsAddDeviceModal(false);
         setNewDeviceName('');
       }
-    } catch (err) { alert("Server backend terputus."); }
+    } catch (err) { console.error(err); alert("Server backend terputus. " + err.message); }
   };
 
   const handleDeleteSession = async (id) => {
@@ -446,7 +446,7 @@ export default function Home() {
         body: JSON.stringify({ sessionId: activeSessionId, numbers: parsedNumbers, message: f.message.trim() ? f.message : '', media: f.media })
       });
       if (!res.ok) alert((await res.json()).error);
-    } catch (err) { alert("Server backend terputus saat request blast."); }
+    } catch (err) { console.error(err); alert("Server backend terputus saat request blast. " + err.message); }
   };
 
   const openChatRoom = async (sessionId, senderNumber, senderName) => {
