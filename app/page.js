@@ -16,6 +16,9 @@ const getSocketUrl = () => {
 };
 
 const DEFAULT_MSG = `Halo Kak 👋\n\nKenalin, *Gamamilk* 🥛\nSusu etawa pilihan keluarga.`;
+const BLAST_BATCH_LIMIT = 30;
+const BLAST_BATCH_COOLDOWN_MS = 30000;
+const BLAST_FINISH_TIMEOUT_MS = 15 * 60 * 1000;
 
 const CustomAccountDropdown = ({ options, activeId, onChange }) => {
   const [open, setOpen] = useState(false);
@@ -52,6 +55,7 @@ const CustomAccountDropdown = ({ options, activeId, onChange }) => {
 
 export default function Home() {
   const [activeMenu, setActiveMenu] = useState('devices'); // 'devices' | 'blast' | 'chat'
+  const [isWaMenuOpen, setIsWaMenuOpen] = useState(true);
 
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState('');
@@ -66,6 +70,14 @@ export default function Home() {
   // Global State
   const [progressLog, setProgressLog] = useState([]);
   const [inbox, setInbox] = useState([]);
+  const [sessionQueueStatus, setSessionQueueStatus] = useState({});
+  const [blastCooldownPopup, setBlastCooldownPopup] = useState({
+    open: false,
+    sessionId: '',
+    nextBatch: 0,
+    totalBatches: 0,
+    secondsLeft: 0,
+  });
 
   // Chat Room 1on1 State
   const [activeChat, setActiveChat] = useState(null); // { sessionId, senderNumber, senderName }
@@ -214,6 +226,87 @@ export default function Home() {
   const progressEndRef = useRef(null);
   const chatEndRef = useRef(null);
   const excelUploadRef = useRef(null);
+  const blastFinishWaitersRef = useRef({});
+  const blastCooldownIntervalRef = useRef(null);
+
+  const clearBlastCooldownPopup = () => {
+    if (blastCooldownIntervalRef.current) {
+      clearInterval(blastCooldownIntervalRef.current);
+      blastCooldownIntervalRef.current = null;
+    }
+    setBlastCooldownPopup({
+      open: false,
+      sessionId: '',
+      nextBatch: 0,
+      totalBatches: 0,
+      secondsLeft: 0,
+    });
+  };
+
+  const registerBlastFinishWaiter = (sessionId) => {
+    const existing = blastFinishWaitersRef.current[sessionId];
+    if (existing?.reject) existing.reject(new Error(`Menutup waiter lama untuk sesi ${sessionId}.`));
+
+    let resolveWait;
+    let rejectWait;
+
+    const promise = new Promise((resolve, reject) => {
+      resolveWait = resolve;
+      rejectWait = reject;
+    });
+
+    const timeoutId = setTimeout(() => {
+      delete blastFinishWaitersRef.current[sessionId];
+      rejectWait(new Error(`Timeout menunggu blast selesai pada sesi ${sessionId}.`));
+    }, BLAST_FINISH_TIMEOUT_MS);
+
+    blastFinishWaitersRef.current[sessionId] = {
+      resolve: () => {
+        clearTimeout(timeoutId);
+        delete blastFinishWaitersRef.current[sessionId];
+        resolveWait();
+      },
+      reject: (reason) => {
+        clearTimeout(timeoutId);
+        delete blastFinishWaitersRef.current[sessionId];
+        rejectWait(reason instanceof Error ? reason : new Error(String(reason)));
+      },
+    };
+
+    return {
+      promise,
+      cancel: () => {
+        const waiter = blastFinishWaitersRef.current[sessionId];
+        if (waiter?.reject) waiter.reject(new Error(`Blast sesi ${sessionId} dibatalkan.`));
+      }
+    };
+  };
+
+  const waitBlastCooldown = (sessionId, nextBatch, totalBatches, waitMs) => new Promise((resolve) => {
+    const totalSeconds = Math.max(1, Math.ceil(waitMs / 1000));
+    let secondsLeft = totalSeconds;
+
+    clearBlastCooldownPopup();
+    setBlastCooldownPopup({
+      open: true,
+      sessionId,
+      nextBatch,
+      totalBatches,
+      secondsLeft: totalSeconds,
+    });
+
+    blastCooldownIntervalRef.current = setInterval(() => {
+      secondsLeft -= 1;
+
+      if (secondsLeft <= 0) {
+        clearBlastCooldownPopup();
+        resolve();
+        return;
+      }
+
+      setBlastCooldownPopup(prev => ({ ...prev, secondsLeft }));
+    }, 1000);
+  });
 
   useEffect(() => {
     const socketUrl = getSocketUrl();
@@ -283,15 +376,24 @@ export default function Home() {
     });
 
     socket.on('blast_wait', (data) => {
-      setProgressLog(prev => [...prev, { type: 'wait', text: `[${data.sessionId}] Delay anti-blokir (${data.ms / 1000}d)...` }]);
+      setProgressLog(prev => [...prev, { type: 'wait', text: '[' + data.sessionId + '] Delay anti-blokir (' + Math.ceil(data.ms / 1000) + 's)...' }]);
     });
 
     socket.on('blast_finished', (data) => {
       setForms(prev => ({ ...prev, [data.sessionId]: { ...(prev[data.sessionId] || {}), isBlasting: false } }));
-      setProgressLog(prev => [...prev, { type: 'success', text: `[${data.sessionId}] ✅ Blast rampung!` }]);
+      setProgressLog(prev => [...prev, { type: 'success', text: '[' + data.sessionId + '] Blast rampung!' }]);
+      const waiter = blastFinishWaitersRef.current[data.sessionId];
+      if (waiter?.resolve) waiter.resolve();
     });
 
-    return () => socket.disconnect();
+    return () => {
+      Object.keys(blastFinishWaitersRef.current).forEach((sessionId) => {
+        const waiter = blastFinishWaitersRef.current[sessionId];
+        if (waiter?.reject) waiter.reject(new Error('Socket untuk sesi ' + sessionId + ' terputus.'));
+      });
+      clearBlastCooldownPopup();
+      socket.disconnect();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -434,19 +536,74 @@ export default function Home() {
 
   const handleStartBlast = async () => {
     if (!activeSessionId) return alert("Pilih Tab/Sesi WA terlebih dahulu!");
+    const sessionId = activeSessionId;
     const f = getForm();
+    if (sessionQueueStatus[sessionId]) return alert("Blast untuk sesi ini masih berjalan. Mohon tunggu sampai selesai.");
     if (!f.numbers.trim()) return alert("Daftar nomor harus diisi!");
     if (!f.message.trim() && !f.media) return alert("Teks promosi tidak boleh kosong jika tanpa gambar.");
 
-    const parsedNumbers = f.numbers.split(/[\n,]+/).map(n => n.trim()).filter(n => n !== '');
+    const parsedNumbers = [...new Set(
+      f.numbers.split(/[\n,]+/).map(n => n.trim()).filter(n => n !== '')
+    )];
+    if (parsedNumbers.length === 0) return alert("Nomor target valid tidak ditemukan.");
+    const chunks = [];
+
+    for (let i = 0; i < parsedNumbers.length; i += BLAST_BATCH_LIMIT) {
+      chunks.push(parsedNumbers.slice(i, i + BLAST_BATCH_LIMIT));
+    }
+
+    setSessionQueueStatus(prev => ({ ...prev, [sessionId]: true }));
+    setProgressLog(prev => [...prev, {
+      type: 'info',
+      text: `[${sessionId}] Mode aman aktif: ${parsedNumbers.length} nomor dibagi ${chunks.length} batch (maks ${BLAST_BATCH_LIMIT} nomor/batch).`
+    }]);
 
     try {
-      const res = await fetch(`${getSocketUrl()}/api/blast`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId: activeSessionId, numbers: parsedNumbers, message: f.message.trim() ? f.message : '', media: f.media })
-      });
-      if (!res.ok) alert((await res.json()).error);
-    } catch (err) { console.error(err); alert("Server backend terputus saat request blast. " + err.message); }
+      for (let i = 0; i < chunks.length; i++) {
+        const batchNo = i + 1;
+        const numbersChunk = chunks[i];
+        const waiter = registerBlastFinishWaiter(sessionId);
+
+        setProgressLog(prev => [...prev, {
+          type: 'info',
+          text: `[${sessionId}] Mengirim batch ${batchNo}/${chunks.length} (${numbersChunk.length} nomor)...`
+        }]);
+
+        const res = await fetch(`${getSocketUrl()}/api/blast`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId, numbers: numbersChunk, message: f.message.trim() ? f.message : '', media: f.media })
+        });
+
+        if (!res.ok) {
+          waiter.cancel();
+          let errMsg = `Batch ${batchNo} gagal dijalankan.`;
+          try {
+            const errJson = await res.json();
+            if (errJson?.error) errMsg = errJson.error;
+          } catch (_) { }
+          throw new Error(errMsg);
+        }
+
+        await waiter.promise;
+
+        if (i < chunks.length - 1) {
+          setProgressLog(prev => [...prev, {
+            type: 'wait',
+            text: `[${sessionId}] Batch ${batchNo} selesai. Jeda ${Math.ceil(BLAST_BATCH_COOLDOWN_MS / 1000)} detik sebelum lanjut batch berikutnya.`
+          }]);
+          await waitBlastCooldown(sessionId, batchNo + 1, chunks.length, BLAST_BATCH_COOLDOWN_MS);
+        }
+      }
+
+      setProgressLog(prev => [...prev, { type: 'success', text: `[${sessionId}] Semua batch selesai diproses.` }]);
+    } catch (err) {
+      console.error(err);
+      setProgressLog(prev => [...prev, { type: 'error', text: `[${sessionId}] ${err.message || 'Terjadi gangguan saat blast bertahap.'}` }]);
+      alert(err.message || "Server backend terputus saat request blast.");
+    } finally {
+      clearBlastCooldownPopup();
+      setSessionQueueStatus(prev => ({ ...prev, [sessionId]: false }));
+    }
   };
 
   const openChatRoom = async (sessionId, senderNumber, senderName) => {
@@ -606,6 +763,9 @@ export default function Home() {
   const renderScreenBlast = () => {
     const currentF = getForm();
     const activeData = sessions.find(s => s.sessionId === activeSessionId);
+    const isQueuedBlast = !!sessionQueueStatus[activeSessionId];
+    const isBlastLocked = currentF.isBlasting || isQueuedBlast;
+    const isCoolingDown = blastCooldownPopup.open && blastCooldownPopup.sessionId === activeSessionId;
     return (
       <div className="flex-1 p-6 md:p-8 h-full animate-in fade-in duration-300 flex gap-6">
 
@@ -647,7 +807,7 @@ export default function Home() {
                     <div className="relative w-full h-20 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-xl flex items-center justify-center transition-all cursor-pointer">
                       <ImageIcon size={20} className="text-slate-400 mr-2" />
                       <span className="text-xs text-slate-500 font-medium">Klik untuk upload lampiran...</span>
-                      <input type="file" id="imageUpload" accept="image/png, image/jpeg" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileChange} disabled={currentF.isBlasting} />
+                      <input type="file" id="imageUpload" accept="image/png, image/jpeg" className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" onChange={handleFileChange} disabled={isBlastLocked} />
                     </div>
                   ) : (
                     <div className="flex items-center p-3 gap-3 rounded-xl border border-blue-100 bg-blue-50/50">
@@ -666,13 +826,13 @@ export default function Home() {
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-sm font-bold text-slate-700">Target Nomor WhatsApp</label>
                     <div className="flex items-center gap-2">
-                      <button onClick={loadContactsIntoblast} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 rounded-lg text-xs font-bold transition shadow-sm border border-indigo-100">
+                      <button onClick={loadContactsIntoblast} disabled={isBlastLocked} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 hover:text-indigo-800 rounded-lg text-xs font-bold transition shadow-sm border border-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed">
                         <Users size={14} /> Buku Telepon
                       </button>
-                      <button onClick={handleGoogleSheetsImport} className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800 rounded-lg text-xs font-bold transition shadow-sm border border-sky-100">
+                      <button onClick={handleGoogleSheetsImport} disabled={isBlastLocked} className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-50 text-sky-700 hover:bg-sky-100 hover:text-sky-800 rounded-lg text-xs font-bold transition shadow-sm border border-sky-100 disabled:opacity-50 disabled:cursor-not-allowed">
                         <Link2 size={14} className="-rotate-45" /> Google Sheets
                       </button>
-                      <button onClick={() => excelUploadRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 rounded-lg text-xs font-bold transition shadow-sm border border-emerald-100">
+                      <button onClick={() => excelUploadRef.current?.click()} disabled={isBlastLocked} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 hover:text-emerald-800 rounded-lg text-xs font-bold transition shadow-sm border border-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed">
                         <FileSpreadsheet size={14} /> Import Excel
                       </button>
                     </div>
@@ -680,22 +840,22 @@ export default function Home() {
                   <textarea
                     value={currentF.numbers}
                     onChange={e => updateForm('numbers', e.target.value)}
-                    disabled={currentF.isBlasting}
+                    disabled={isBlastLocked}
                     placeholder="Contoh:&#10;08123456789&#10;628987654321&#10;&#10;Atau klik tombol Import Data Excel di atas..."
                     className="flex-1 w-full bg-slate-50 border border-slate-200 rounded-xl p-4 text-sm font-mono text-slate-700 focus:border-blue-500 focus:bg-white outline-none resize-none shadow-inner"
                   />
-                  <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><AlertCircle size={12} /> Tiap baris baru dihitung 1 nomor WA target.</span>
+                  <span className="text-xs text-slate-400 mt-2 flex items-center gap-1"><AlertCircle size={12} /> Tiap baris baru dihitung 1 nomor WA target. Sistem akan otomatis mengirim maksimal 30 nomor per batch.</span>
                 </div>
 
                 {/* Teks Promosi */}
                 <div className="mb-6 flex-1 flex flex-col">
                   <label className="text-sm font-bold text-slate-700 mb-2 block">Caption WhatsApp</label>
-                  <textarea value={currentF.message} onChange={(e) => updateForm('message', e.target.value)} disabled={currentF.isBlasting} className="w-full flex-1 min-h-[120px] bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-700 focus:border-blue-500 outline-none leading-relaxed transition resize-none"></textarea>
+                  <textarea value={currentF.message} onChange={(e) => updateForm('message', e.target.value)} disabled={isBlastLocked} className="w-full flex-1 min-h-[120px] bg-slate-50 border border-slate-200 rounded-xl p-3 text-sm text-slate-700 focus:border-blue-500 outline-none leading-relaxed transition resize-none"></textarea>
                 </div>
 
-                <button onClick={handleStartBlast} disabled={currentF.isBlasting} className="w-full mt-auto py-3.5 bg-neutral-900 hover:bg-black text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:bg-slate-200 disabled:text-slate-400 transition-all">
-                  {currentF.isBlasting ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                  <span>{currentF.isBlasting ? `Pengiriman Sedang Berjalan...` : `EKSEKUSI BROADCAST [${activeSessionId}]`}</span>
+                <button onClick={handleStartBlast} disabled={isBlastLocked} className="w-full mt-auto py-3.5 bg-neutral-900 hover:bg-black text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg disabled:bg-slate-200 disabled:text-slate-400 transition-all">
+                  {isBlastLocked ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
+                  <span>{isBlastLocked ? (isCoolingDown ? `Mohon tunggu ${blastCooldownPopup.secondsLeft} detik...` : `Pengiriman Sedang Berjalan...`) : `EKSEKUSI BROADCAST [${activeSessionId}]`}</span>
                 </button>
               </div>
             )}
@@ -931,7 +1091,7 @@ export default function Home() {
         {/* Tip Box */}
         <div className="bg-indigo-50 text-indigo-700 p-6 rounded-3xl border border-indigo-100 text-[13px] font-medium leading-relaxed shadow-sm shrink-0 mt-auto">
           <AlertCircle size={18} className="inline mr-2 -mt-1" />
-          <span className="font-bold">Tips:</span> Jika Anda menyetting Trigger menjadi "1" dengan mode Sama Persis, maka pelanggan harus menginput pas angka "1". Jika dia membalas "1 kak", bot tidak akan jalan. Gunakan mode Mengandung Kata untuk algoritma yang fleksibel.
+          <span className="font-bold">Tips:</span> Jika Anda menyetting Trigger menjadi &quot;1&quot; dengan mode Sama Persis, maka pelanggan harus menginput pas angka &quot;1&quot;. Jika dia membalas &quot;1 kak&quot;, bot tidak akan jalan. Gunakan mode Mengandung Kata untuk algoritma yang fleksibel.
         </div>
 
       </div>
@@ -1131,43 +1291,63 @@ export default function Home() {
     </div>
   );
 
+  const waNonResmiMenus = [
+    { key: 'devices', label: 'Device', icon: Smartphone },
+    { key: 'blast', label: 'Blast', icon: Send },
+    { key: 'chat', label: 'Inbox', icon: MessageSquare },
+    { key: 'autoreply', label: 'Chatbot', icon: Bot },
+    { key: 'contacts', label: 'Kontak', icon: Users },
+  ];
+
   // --- MAIN LAYOUT (SIDEBAR & HEADER) ---
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans selection:bg-blue-500/30 overflow-hidden">
 
       {/* SIDEBAR MAIN MENU */}
-      <div className="w-[80px] bg-white border-r border-slate-200 flex flex-col items-center py-6 flex-shrink-0 z-50 shadow-[2px_0_10px_rgba(0,0,0,0.02)]">
-        <div className="w-12 h-12 bg-gradient-to-tr from-blue-700 to-indigo-600 rounded-xl flex items-center justify-center mb-8 shadow-lg shadow-blue-500/40 transform transition hover:scale-105 cursor-pointer">
-          <span className="text-white text-xl font-black tracking-tighter">CRM</span>
+      <div className="w-[260px] bg-white border-r border-slate-200 flex flex-col py-6 flex-shrink-0 z-50 shadow-[2px_0_10px_rgba(0,0,0,0.02)]">
+        <div className="px-4">
+          <div className="h-12 bg-gradient-to-tr from-blue-700 to-indigo-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/30">
+            <span className="text-white text-lg font-black tracking-tight">CRM Dashboard</span>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 w-full px-3">
-          <button onClick={() => setActiveMenu('devices')} className={`w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-xl transition cursor-pointer group ${activeMenu === 'devices' ? 'bg-blue-50 text-blue-600 border border-blue-200 shadow-sm' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`} title="Panel Koneksi HP">
-            <Smartphone size={22} className={activeMenu === 'devices' ? '' : 'group-hover:-translate-y-0.5 transition-transform'} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Device</span>
+
+        <div className="px-4 mt-6">
+          <button
+            onClick={() => setIsWaMenuOpen(prev => !prev)}
+            className="w-full flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-700 font-bold hover:bg-slate-100 transition"
+          >
+            <span className="flex items-center gap-2">
+              <Smartphone size={16} className="text-blue-600" />
+              WA non Resmi
+            </span>
+            <ChevronDown size={16} className={`text-slate-400 transition-transform ${isWaMenuOpen ? 'rotate-180' : ''}`} />
           </button>
-          <button onClick={() => setActiveMenu('blast')} className={`w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-xl transition cursor-pointer group ${activeMenu === 'blast' ? 'bg-blue-50 text-blue-600 border border-blue-200 shadow-sm' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`} title="Dashboard Broadcast">
-            <Send size={22} className={activeMenu === 'blast' ? '' : 'group-hover:-translate-y-0.5 transition-transform'} />
-            <span className="text-[9px] font-bold uppercase tracking-wider">Blast</span>
-          </button>
-          <button onClick={() => setActiveMenu('chat')} className={`w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-2xl transition ${activeMenu === 'chat' ? 'bg-blue-50 text-blue-600 shadow-sm' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
-            <MessageSquare size={22} className={activeMenu === 'chat' ? 'mb-0.5' : ''} />
-            <span className="text-[10px] font-bold">Inbox</span>
-          </button>
-          <div className="w-8 mx-auto h-px bg-slate-200 my-1"></div>
-          <button onClick={() => setActiveMenu('autoreply')} className={`w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-2xl transition ${activeMenu === 'autoreply' ? 'bg-indigo-50 text-indigo-600 shadow-sm' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
-            <Bot size={22} className={activeMenu === 'autoreply' ? 'mb-0.5' : ''} />
-            <span className="text-[10px] font-bold">Chatbot</span>
-          </button>
-          <div className="w-8 mx-auto h-px bg-slate-200 my-1"></div>
-          <button onClick={() => setActiveMenu('contacts')} className={`w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-2xl transition ${activeMenu === 'contacts' ? 'bg-teal-50 text-teal-600 shadow-sm' : 'text-slate-400 hover:bg-slate-50 hover:text-slate-600'}`}>
-            <Users size={22} className={activeMenu === 'contacts' ? 'mb-0.5' : ''} />
-            <span className="text-[10px] font-bold">Kontak</span>
-          </button>
+
+          {isWaMenuOpen && (
+            <div className="mt-2 ml-2 pl-3 border-l border-slate-200 flex flex-col gap-1">
+              {waNonResmiMenus.map((menu) => {
+                const Icon = menu.icon;
+                const isActive = activeMenu === menu.key;
+                return (
+                  <button
+                    key={menu.key}
+                    onClick={() => setActiveMenu(menu.key)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-semibold transition ${isActive ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700 border border-transparent'}`}
+                  >
+                    <Icon size={15} />
+                    <span>{menu.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
-        <div className="mt-auto px-3 w-full">
-          <button className="w-full aspect-square flex flex-col gap-1 items-center justify-center rounded-xl text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition cursor-pointer" title="Database MySQL Status">
-            <Database size={22} />
-          </button>
+
+        <div className="mt-auto px-4">
+          <div className="px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 text-slate-500 text-xs font-bold tracking-wide flex items-center gap-2">
+            <Database size={14} />
+            XAMPP MySQL Linked
+          </div>
         </div>
       </div>
 
@@ -1207,6 +1387,30 @@ export default function Home() {
 
       </div>
 
+      {blastCooldownPopup.open && (
+        <div className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-slate-900/55 backdrop-blur-sm">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-slate-200 p-6">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center">
+                <Clock size={18} />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800">Mohon tunggu sebentar</h3>
+            </div>
+            <p className="text-sm text-slate-600 leading-relaxed">
+              Sistem sedang jeda aman sebelum lanjut kirim blast batch berikutnya.
+            </p>
+            <div className="mt-5 p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+              <span className="text-xs font-bold tracking-wider uppercase text-slate-500">
+                Batch {blastCooldownPopup.nextBatch}/{blastCooldownPopup.totalBatches}
+              </span>
+              <span className="text-2xl font-black text-amber-600 tabular-nums">
+                {blastCooldownPopup.secondsLeft}s
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* MODAL: TAMBAH PERANGKAT */}
       {isAddDeviceModal && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
@@ -1235,3 +1439,5 @@ export default function Home() {
     </div>
   );
 }
+
+
